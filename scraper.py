@@ -10,6 +10,8 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
+KST = timezone(timedelta(hours=9))
+
 GALLERIES = [
     {"id": "thesingularity", "name": "특갤"},
 ]
@@ -22,6 +24,33 @@ HEADERS = {
     ),
     "Referer": "https://gall.dcinside.com/",
 }
+
+
+def parse_dc_date(date_el):
+    now_utc = datetime.now(timezone.utc)
+    if not date_el:
+        return now_utc.isoformat()
+
+    title_attr = (date_el.get("title") or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            dt_kst = datetime.strptime(title_attr, fmt).replace(tzinfo=KST)
+            return dt_kst.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
+
+    txt = date_el.get_text(strip=True)
+    m = re.match(r"^(\d{1,2}):(\d{2})$", txt)
+    if m:
+        now_kst = datetime.now(KST)
+        hh, mm = int(m.group(1)), int(m.group(2))
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            dt_kst = now_kst.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if dt_kst > now_kst + timedelta(minutes=5):
+                dt_kst -= timedelta(days=1)
+            return dt_kst.astimezone(timezone.utc).isoformat()
+
+    return now_utc.isoformat()
 
 
 def fetch_gallery_page(gal_id: str, gal_name: str, page: int):
@@ -61,6 +90,9 @@ def fetch_gallery_page(gal_id: str, gal_name: str, page: int):
         recommend = int(rec_el.get_text(strip=True)) if rec_el and rec_el.get_text(strip=True).isdigit() else 0
         views = int(view_el.get_text(strip=True)) if view_el and view_el.get_text(strip=True).isdigit() else 0
 
+        date_el = row.select_one("td.gall_date")
+        created_at = parse_dc_date(date_el)
+
         mobile_url = f"https://m.dcinside.com/board/{gal_id}/{post_no}"
 
         items.append({
@@ -72,6 +104,7 @@ def fetch_gallery_page(gal_id: str, gal_name: str, page: int):
             "title": title,
             "url": mobile_url,
             "author": author,
+            "created_at": created_at,
             "recommend": recommend,
             "views": views,
         })
@@ -119,12 +152,7 @@ def main():
 
         for p in all_posts:
             prev = existing_map.get(p["id"])
-            if prev:
-                p["feedback"] = prev.get("feedback", 0)
-                if prev.get("created_at"):
-                    p["created_at"] = prev["created_at"]
-            else:
-                p["feedback"] = 0
+            p["feedback"] = prev.get("feedback", 0) if prev else 0
 
         supabase.table("dc_posts").upsert(all_posts, on_conflict="id").execute()
         print(f"총 {len(all_posts)}건 DB 반영 완료")
