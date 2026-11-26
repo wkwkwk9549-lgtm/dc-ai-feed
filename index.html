@@ -311,7 +311,7 @@
 
       weights[kw] = scoreVal;
       renderKwList();
-      render(hour12: false);
+      render();
 
       await db.from("user_weights").upsert(
         { token: kw, score: scoreVal, updated_at: new Date().toISOString() },
