@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <meta name="theme-color" content="#111827" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>내 특갤 피드</title>
+  <link rel="manifest" href='data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22%EB%82%B4%20%ED%8A%B9%EA%B0%A4%20%ED%94%BC%EB%93%9C%22%2C%22short_name%22%3A%22%ED%8A%B9%EA%B0%A4%20%ED%94%BC%EB%93%9C%22%2C%22start_url%22%3A%22.%2F%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f172a%22%2C%22theme_color%22%3A%22%230f172a%22%7D' />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -69,7 +72,7 @@
     .fb-btn.on-like { background: #14532d; border-color: #22c55e; color: #bbf7d0; }
     .fb-btn.on-dislike { background: #450a0a; border-color: #ef4444; color: #fecaca; }
 
-    /* 키워드 관리 패널 & 모달 */
+    /* 키워드 관리 모달 */
     .modal-backdrop {
       display: none; position: fixed; inset: 0; z-index: 50;
       background: rgba(2, 6, 23, 0.8); backdrop-filter: blur(4px);
@@ -173,6 +176,9 @@
     let weights = {};
     let currentSort = "smart";
     let onlyUnread = false;
+    let isCrawling = false;
+    let pollTimers = [];
+    let lastLoadedAt = 0;
 
     const STOPWORDS = new Set([
       "진짜", "오늘", "지금", "방금", "아까", "내일", "요즘", "그냥", "근데", "그래서",
@@ -217,7 +223,6 @@
       return Array.from(tokens);
     }
 
-    // 완전 차단(-500점 이하) 키워드가 제목 부분문자열 또는 토큰에 포함되었는지 확인
     function isBlockedPost(post) {
       const titleLower = post.title.toLowerCase();
       const subjToken = post.subject ? `sub:${post.subject.toLowerCase()}` : "";
@@ -242,7 +247,6 @@
       let pref = 0;
       tokens.forEach(t => { pref += (weights[t] || 0); });
 
-      // 직접 부스트 등록한 키워드가 띄어쓰기 없이 제목에 포함된 경우에도 가산점 반영
       const titleLower = post.title.toLowerCase();
       const tokenSet = new Set(tokens);
       for (const [kw, score] of Object.entries(weights)) {
@@ -259,7 +263,6 @@
       return Number((pref * 1.5 + freshness + recBonus + hotBonus).toFixed(1));
     }
 
-    // 키워드 모달 제어
     function openKwModal() {
       renderKwList();
       document.getElementById("kwModal").classList.add("open");
@@ -323,7 +326,19 @@
       await db.from("user_weights").delete().eq("token", token);
     }
 
-async function triggerCrawl() {
+    function clearPollTimers() {
+      pollTimers.forEach(id => clearTimeout(id));
+      pollTimers = [];
+    }
+
+    function getFeedSignature(list) {
+      const maxPostNo = list.reduce((m, p) => Math.max(m, Number(p.post_no) || 0), 0);
+      return `${list.length}:${maxPostNo}`;
+    }
+
+    async function triggerCrawl() {
+      if (isCrawling) return;
+
       let pat = localStorage.getItem(GH_PAT_KEY);
       if (!pat) {
         pat = prompt("GitHub 토큰(github_pat_...)을 한 번만 입력하세요.\n(이 기기 브라우저에만 안전하게 저장됩니다)");
@@ -332,13 +347,16 @@ async function triggerCrawl() {
         localStorage.setItem(GH_PAT_KEY, pat);
       }
 
+      clearPollTimers();
+      isCrawling = true;
+
       const btn = document.getElementById("crawlBtn");
       const statusTxt = document.getElementById("statusTxt");
       btn.disabled = true;
       btn.textContent = "수집중";
-      statusTxt.textContent = "즉시 조회 + 수집 요청";
+      statusTxt.textContent = "즉시 조회 + 요청 중";
 
-      // 1. 누르자마자 먼저 현재 DB 상태 즉시 반영
+      const beforeSig = getFeedSignature(posts);
       await loadData();
 
       try {
@@ -358,21 +376,29 @@ async function triggerCrawl() {
         }
         if (!res.ok) throw new Error(`GitHub 응답 오류 (${res.status})`);
 
-        // 2. 수집 완료 시점에 맞춰 단계별 자동 재조회(8초, 16초, 24초)
-        const checkpoints = [8, 16, 24];
+        const checkpoints = [5, 11, 18, 26];
         checkpoints.forEach((sec, idx) => {
-          setTimeout(async () => {
-            statusTxt.textContent = `반영 확인 중 (${idx + 1}/${checkpoints.length})`;
+          const timerId = setTimeout(async () => {
+            if (!isCrawling) return;
+            statusTxt.textContent = `반영 확인 (${idx + 1}/${checkpoints.length})`;
             await loadData();
-            if (idx === checkpoints.length - 1) {
+            const afterSig = getFeedSignature(posts);
+            const isLast = idx === checkpoints.length - 1;
+
+            if (afterSig !== beforeSig || isLast) {
+              clearPollTimers();
+              isCrawling = false;
               btn.disabled = false;
               btn.textContent = "⚡ 수집";
             }
           }, sec * 1000);
+          pollTimers.push(timerId);
         });
       } catch (err) {
+        clearPollTimers();
         alert(err.message);
         statusTxt.textContent = "수집 실패";
+        isCrawling = false;
         btn.disabled = false;
         btn.textContent = "⚡ 수집";
       }
@@ -401,11 +427,11 @@ async function triggerCrawl() {
 
       btn.disabled = true;
       btn.textContent = "로딩중...";
-      statusTxt.textContent = "DB 조회 중";
+      if (!isCrawling) statusTxt.textContent = "DB 조회 중";
 
       try {
         const [postRes, weightRes] = await Promise.all([
-          db.from("dc_posts").select("*").eq("gallery_id", "thesingularity").order("created_at", { ascending: false }).limit(200),
+          db.from("dc_posts").select("*").eq("gallery_id", "thesingularity").order("post_no", { ascending: false }).limit(200),
           db.from("user_weights").select("*")
         ]);
 
@@ -416,8 +442,9 @@ async function triggerCrawl() {
         weights = {};
         (weightRes.data || []).forEach(r => { weights[r.token] = r.score; });
 
+        lastLoadedAt = Date.now();
         const now = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        statusTxt.textContent = `${posts.length}건 (${now})`;
+        if (!isCrawling) statusTxt.textContent = `${posts.length}건 (${now})`;
         render();
       } catch (err) {
         statusTxt.textContent = "오류 발생";
@@ -468,6 +495,8 @@ async function triggerCrawl() {
 
       if (currentSort === "smart") {
         list.sort((a, b) => b._score - a._score);
+      } else {
+        list.sort((a, b) => (Number(b.post_no) || 0) - (Number(a.post_no) || 0));
       }
 
       if (!list.length) {
@@ -499,6 +528,12 @@ async function triggerCrawl() {
         `;
       }).join("");
     }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && !isCrawling && Date.now() - lastLoadedAt > 30000) {
+        loadData();
+      }
+    });
 
     loadData();
   </script>
