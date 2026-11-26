@@ -17,16 +17,19 @@
       background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(8px);
       padding: 12px 14px; border-bottom: 1px solid #1e293b;
     }
-    .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
     h1 { font-size: 17px; font-weight: 700; }
+    .right-box { display: flex; align-items: center; gap: 8px; }
+    .status-txt { font-size: 11px; color: #94a3b8; }
     .refresh-btn {
       background: #1e293b; color: #93c5fd; border: 1px solid #334155;
-      padding: 5px 10px; border-radius: 8px; font-size: 12px;
+      padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer;
     }
+    .refresh-btn:active { background: #334155; }
     .tabs { display: flex; gap: 6px; overflow-x: auto; }
     .tab {
       background: #1e293b; color: #94a3b8; border: none;
-      padding: 6px 12px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+      padding: 6px 12px; border-radius: 999px; font-size: 12px; white-space: nowrap; cursor: pointer;
     }
     .tab.active { background: #3b82f6; color: #fff; font-weight: 600; }
     .feed { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
@@ -50,7 +53,7 @@
     .btns { display: flex; gap: 8px; }
     .fb-btn {
       background: #0f172a; border: 1px solid #334155; color: #cbd5e1;
-      padding: 5px 12px; border-radius: 8px; font-size: 13px;
+      padding: 5px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
     }
     .fb-btn.on-like { background: #14532d; border-color: #22c55e; color: #bbf7d0; }
     .fb-btn.on-dislike { background: #450a0a; border-color: #ef4444; color: #fecaca; }
@@ -60,7 +63,10 @@
   <header>
     <div class="top-row">
       <h1>🤖 내 특갤 피드</h1>
-      <button class="refresh-btn" onclick="loadData()">새로고침</button>
+      <div class="right-box">
+        <span class="status-txt" id="statusTxt">대기 중</span>
+        <button class="refresh-btn" id="refreshBtn" onclick="loadData()">새로고침</button>
+      </div>
     </div>
     <div class="tabs" id="tabs">
       <button class="tab active" data-sort="smart" onclick="setSort('smart', this)">✨ 내 취향순</button>
@@ -72,7 +78,7 @@
 
   <script>
     const SUPABASE_URL = "https://kfmqoicilcunpahxgyek.supabase.co";
-    // ▼ 아래 따옴표 안에 Supabase에서 복사한 anon 키(eyJ...)를 붙여넣으세요
+    // ▼ 아래 따옴표 안에 Supabase Legacy 탭의 anon 키(eyJ...)를 붙여넣으세요
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmbXFvaWNpbGN1bnBhaHhneWVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2ODY0NDcsImV4cCI6MjExMTI2MjQ0N30.s-amBbpBGMSVTMtaiQGVVwVBd8oxXGPGLfLgKwGFhB8";
     const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -105,14 +111,37 @@
     }
 
     async function loadData() {
-      const [postRes, weightRes] = await Promise.all([
-        db.from("dc_posts").select("*").eq("gallery_id", "thesingularity").order("created_at", { ascending: false }).limit(200),
-        db.from("user_weights").select("*")
-      ]);
-      posts = postRes.data || [];
-      weights = {};
-      (weightRes.data || []).forEach(r => { weights[r.token] = r.score; });
-      render();
+      const btn = document.getElementById("refreshBtn");
+      const statusTxt = document.getElementById("statusTxt");
+      const feed = document.getElementById("feed");
+
+      btn.disabled = true;
+      btn.textContent = "로딩중...";
+      statusTxt.textContent = "DB 조회 중";
+
+      try {
+        const [postRes, weightRes] = await Promise.all([
+          db.from("dc_posts").select("*").eq("gallery_id", "thesingularity").order("created_at", { ascending: false }).limit(200),
+          db.from("user_weights").select("*")
+        ]);
+
+        if (postRes.error) throw postRes.error;
+        if (weightRes.error) throw weightRes.error;
+
+        posts = postRes.data || [];
+        weights = {};
+        (weightRes.data || []).forEach(r => { weights[r.token] = r.score; });
+
+        const now = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        statusTxt.textContent = `${posts.length}건 (${now})`;
+        render();
+      } catch (err) {
+        statusTxt.textContent = "오류 발생";
+        feed.innerHTML = `<p style="color:#f87171;padding:16px;">연결 오류: ${err.message || JSON.stringify(err)}</p>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "새로고침";
+      }
     }
 
     async function vote(postId, value) {
@@ -152,7 +181,7 @@
       }
 
       if (!list.length) {
-        feed.innerHTML = "<p style='color:#94a3b8;padding:20px;'>수집된 글이 없습니다. GitHub Actions를 먼저 실행해 주세요.</p>";
+        feed.innerHTML = "<p style='color:#94a3b8;padding:20px;'>수집된 글이 없습니다.</p>";
         return;
       }
 
