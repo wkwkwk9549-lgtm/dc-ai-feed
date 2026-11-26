@@ -525,17 +525,46 @@
               </div>
             </div>
           </article>
+</article>
         `;
       }).join("");
     }
 
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && !isCrawling && Date.now() - lastLoadedAt > 30000) {
-        loadData();
+    const AUTO_CRAWL_INTERVAL_MS = 10 * 60 * 1000;
+    const LAST_AUTO_CRAWL_KEY = "dc_feed_last_auto_crawl";
+
+    function maybeAutoCrawlOnOpen() {
+      if (isCrawling || !localStorage.getItem(GH_PAT_KEY)) return;
+      const last = Number(localStorage.getItem(LAST_AUTO_CRAWL_KEY) || "0");
+      if (Date.now() - last >= AUTO_CRAWL_INTERVAL_MS) {
+        localStorage.setItem(LAST_AUTO_CRAWL_KEY, String(Date.now()));
+        triggerCrawl();
       }
+    }
+
+    function refreshOnReturn() {
+      if (document.visibilityState === "visible" && !isCrawling) {
+        if (Date.now() - lastLoadedAt > 15000) {
+          loadData();
+        }
+        maybeAutoCrawlOnOpen();
+      }
+    }
+
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    window.addEventListener("pageshow", () => {
+      if (!isCrawling) loadData();
+      maybeAutoCrawlOnOpen();
     });
 
+    setInterval(() => {
+      if (document.visibilityState === "visible" && !isCrawling) {
+        loadData();
+      }
+    }, 3 * 60 * 1000);
+
     loadData();
+    maybeAutoCrawlOnOpen();
   </script>
 </body>
 </html>
