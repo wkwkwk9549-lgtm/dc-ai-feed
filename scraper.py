@@ -24,8 +24,8 @@ HEADERS = {
 }
 
 
-def fetch_gallery(gal_id: str, gal_name: str):
-    url = f"https://gall.dcinside.com/mgallery/board/lists/?id={gal_id}&page=1"
+def fetch_gallery_page(gal_id: str, gal_name: str, page: int):
+    url = f"https://gall.dcinside.com/mgallery/board/lists/?id={gal_id}&page={page}"
     resp = requests.get(url, headers=HEADERS, timeout=15)
     resp.raise_for_status()
 
@@ -79,6 +79,15 @@ def fetch_gallery(gal_id: str, gal_name: str):
     return items
 
 
+def fetch_gallery(gal_id: str, gal_name: str, pages=(1, 2)):
+    merged = {}
+    for p in pages:
+        for item in fetch_gallery_page(gal_id, gal_name, p):
+            merged[item["id"]] = item
+        time.sleep(1.0)
+    return list(merged.values())
+
+
 def cleanup_old_posts():
     cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     res = (
@@ -96,21 +105,26 @@ def main():
     all_posts = []
     for g in GALLERIES:
         try:
-            posts = fetch_gallery(g["id"], g["name"])
+            posts = fetch_gallery(g["id"], g["name"], pages=(1, 2))
             all_posts.extend(posts)
-            print(f"[{g['name']}] {len(posts)}건 수집 완료")
+            print(f"[{g['name']}] {len(posts)}건 수집 완료 (1~2페이지)")
         except Exception as e:
             print(f"[{g['name']}] 수집 오류: {e}")
         time.sleep(1.5)
 
     if all_posts:
-        existing = supabase.table("dc_posts").select("id,feedback").in_(
-            "id", [p["id"] for p in all_posts]
-        ).execute()
-        fb_map = {row["id"]: row["feedback"] for row in (existing.data or [])}
+        ids = [p["id"] for p in all_posts]
+        existing = supabase.table("dc_posts").select("id,feedback,created_at").in_("id", ids).execute()
+        existing_map = {row["id"]: row for row in (existing.data or [])}
 
         for p in all_posts:
-            p["feedback"] = fb_map.get(p["id"], 0)
+            prev = existing_map.get(p["id"])
+            if prev:
+                p["feedback"] = prev.get("feedback", 0)
+                if prev.get("created_at"):
+                    p["created_at"] = prev["created_at"]
+            else:
+                p["feedback"] = 0
 
         supabase.table("dc_posts").upsert(all_posts, on_conflict="id").execute()
         print(f"총 {len(all_posts)}건 DB 반영 완료")
