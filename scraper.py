@@ -1,6 +1,7 @@
 import os
 import re
 import time
+from datetime import datetime, timezone, timedelta
 import requests
 from bs4 import BeautifulSoup
 from supabase import create_client
@@ -78,6 +79,19 @@ def fetch_gallery(gal_id: str, gal_name: str):
     return items
 
 
+def cleanup_old_posts():
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    res = (
+        supabase.table("dc_posts")
+        .delete()
+        .eq("feedback", 0)
+        .lt("created_at", cutoff)
+        .execute()
+    )
+    deleted_cnt = len(res.data) if res.data else 0
+    print(f"1일 경과 미평가 글 {deleted_cnt}건 자동 정리 완료")
+
+
 def main():
     all_posts = []
     for g in GALLERIES:
@@ -89,19 +103,19 @@ def main():
             print(f"[{g['name']}] 수집 오류: {e}")
         time.sleep(1.5)
 
-    if not all_posts:
-        return
+    if all_posts:
+        existing = supabase.table("dc_posts").select("id,feedback").in_(
+            "id", [p["id"] for p in all_posts]
+        ).execute()
+        fb_map = {row["id"]: row["feedback"] for row in (existing.data or [])}
 
-    existing = supabase.table("dc_posts").select("id,feedback").in_(
-        "id", [p["id"] for p in all_posts]
-    ).execute()
-    fb_map = {row["id"]: row["feedback"] for row in (existing.data or [])}
+        for p in all_posts:
+            p["feedback"] = fb_map.get(p["id"], 0)
 
-    for p in all_posts:
-        p["feedback"] = fb_map.get(p["id"], 0)
+        supabase.table("dc_posts").upsert(all_posts, on_conflict="id").execute()
+        print(f"총 {len(all_posts)}건 DB 반영 완료")
 
-    supabase.table("dc_posts").upsert(all_posts, on_conflict="id").execute()
-    print(f"총 {len(all_posts)}건 DB 반영 완료")
+    cleanup_old_posts()
 
 
 if __name__ == "__main__":
