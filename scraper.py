@@ -1,7 +1,6 @@
 import os
 import re
 import time
-import random
 import requests
 from bs4 import BeautifulSoup
 from supabase import create_client
@@ -11,7 +10,7 @@ SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 GALLERIES = [
-    {"id": "ai_utilize", "name": "특갤"},
+    {"id": "thesingularity", "name": "특갤"},
 ]
 
 HEADERS = {
@@ -88,7 +87,7 @@ def main():
             print(f"[{g['name']}] {len(posts)}건 수집 완료")
         except Exception as e:
             print(f"[{g['name']}] 수집 오류: {e}")
-        time.sleep(random.uniform(1.5, 3.0))
+        time.sleep(1.5)
 
     if not all_posts:
         return
