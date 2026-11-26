@@ -17,15 +17,16 @@
       background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(8px);
       padding: 12px 14px; border-bottom: 1px solid #1e293b;
     }
-    .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    h1 { font-size: 17px; font-weight: 700; }
-    .right-box { display: flex; align-items: center; gap: 8px; }
-    .status-txt { font-size: 11px; color: #94a3b8; }
-    .refresh-btn {
+    .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 6px; }
+    h1 { font-size: 16px; font-weight: 700; white-space: nowrap; }
+    .right-box { display: flex; align-items: center; gap: 6px; }
+    .status-txt { font-size: 11px; color: #94a3b8; white-space: nowrap; }
+    .action-btn {
       background: #1e293b; color: #93c5fd; border: 1px solid #334155;
-      padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer;
+      padding: 5px 9px; border-radius: 8px; font-size: 12px; cursor: pointer; white-space: nowrap;
     }
-    .refresh-btn:active { background: #334155; }
+    .action-btn.crawl { background: #1d4ed8; color: #fff; border-color: #2563eb; font-weight: 600; }
+    .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .tabs { display: flex; gap: 6px; overflow-x: auto; }
     .tab {
       background: #1e293b; color: #94a3b8; border: none;
@@ -37,11 +38,16 @@
       background: #1e293b; border-radius: 12px; padding: 12px 14px;
       border: 1px solid #334155; display: flex; flex-direction: column; gap: 8px;
     }
+    .card.hot { border-color: #f59e0b; background: linear-gradient(180deg, #27231d 0%, #1e293b 100%); }
     .card.liked { border-color: #22c55e; }
     .card.disliked { opacity: 0.45; }
-    .meta { display: flex; gap: 6px; align-items: center; font-size: 11px; color: #94a3b8; }
+    .meta { display: flex; gap: 5px; align-items: center; font-size: 11px; color: #94a3b8; flex-wrap: wrap; }
     .badge {
       background: #334155; color: #e2e8f0; padding: 2px 6px; border-radius: 5px; font-weight: 600;
+    }
+    .hot-badge {
+      background: #78350f; color: #fde68a; border: 1px solid #f59e0b;
+      padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 700;
     }
     .read-badge {
       background: #0f172a; color: #64748b; border: 1px solid #334155;
@@ -52,10 +58,7 @@
       color: #f8fafc; text-decoration: none; font-size: 15px; line-height: 1.4; font-weight: 500;
       word-break: keep-all;
     }
-    .card.read .title {
-      color: #64748b;
-      font-weight: 400;
-    }
+    .card.read .title { color: #64748b; font-weight: 400; }
     .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
     .stats { font-size: 11px; color: #64748b; }
     .btns { display: flex; gap: 8px; }
@@ -73,7 +76,8 @@
       <h1>🤖 내 특갤 피드</h1>
       <div class="right-box">
         <span class="status-txt" id="statusTxt">대기 중</span>
-        <button class="refresh-btn" id="refreshBtn" onclick="loadData()">새로고침</button>
+        <button class="action-btn crawl" id="crawlBtn" onclick="triggerCrawl()">⚡ 수집</button>
+        <button class="action-btn" id="refreshBtn" onclick="loadData()">새로고침</button>
       </div>
     </div>
     <div class="tabs" id="tabs">
@@ -91,6 +95,11 @@
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmbXFvaWNpbGN1bnBhaHhneWVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2ODY0NDcsImV4cCI6MjExMTI2MjQ0N30.s-amBbpBGMSVTMtaiQGVVwVBd8oxXGPGLfLgKwGFhB8";
     const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+    const GH_OWNER = "wkwkwk9549-lgtm";
+    const GH_REPO = "dc-ai-feed";
+    const GH_WORKFLOW = "crawl.yml";
+    const GH_PAT_KEY = "dc_feed_gh_pat";
+
     const READ_STORAGE_KEY = "dc_feed_read_ids";
     let readSet = new Set(JSON.parse(localStorage.getItem(READ_STORAGE_KEY) || "[]"));
 
@@ -99,7 +108,6 @@
     let currentSort = "smart";
     let onlyUnread = false;
 
-    // 노이즈 방지를 위한 불용어 목록
     const STOPWORDS = new Set([
       "진짜", "오늘", "지금", "방금", "아까", "내일", "요즘", "그냥", "근데", "그래서",
       "이거", "저거", "그거", "뭐임", "뭐냐", "뭔가", "왜이럼", "어떻게", "어떡함",
@@ -108,7 +116,6 @@
       "사람", "생각", "느낌", "이유", "문제", "상황", "현황", "근황", "이번", "다음"
     ]);
 
-    // 한국어 조사 제거 (어근 2글자 이상 유지될 때만 제거)
     function stripJosa(word) {
       if (!/[가-힣]$/.test(word)) return word;
       const suffixes = [
@@ -138,10 +145,80 @@
         const clean = stripJosa(raw);
         if (clean.length < 2) continue;
         if (STOPWORDS.has(clean) || STOPWORDS.has(raw)) continue;
-        if (/^\d+$/.test(clean)) continue; // 순수 숫자만 있는 토큰 제외
+        if (/^\d+$/.test(clean)) continue;
         tokens.add(clean);
       }
       return Array.from(tokens);
+    }
+
+    function isHotPost(post) {
+      return (post.recommend || 0) >= 5 || (post.views || 0) >= 300;
+    }
+
+    function calcScore(post) {
+      const tokens = extractTokens(post);
+      let pref = 0;
+      tokens.forEach(t => { pref += (weights[t] || 0); });
+
+      const ageHours = (Date.now() - new Date(post.created_at).getTime()) / 3600000;
+      const freshness = Math.max(0, 6 - ageHours * 0.25);
+      const recBonus = Math.min(6, (post.recommend || 0) * 0.6);
+      const hotBonus = isHotPost(post) ? 2.5 : 0;
+
+      return Number((pref * 1.5 + freshness + recBonus + hotBonus).toFixed(1));
+    }
+
+    async function triggerCrawl() {
+      let pat = localStorage.getItem(GH_PAT_KEY);
+      if (!pat) {
+        pat = prompt("GitHub 토큰(github_pat_...)을 한 번만 입력하세요.\n(이 기기 브라우저에만 안전하게 저장됩니다)");
+        if (!pat) return;
+        pat = pat.trim();
+        localStorage.setItem(GH_PAT_KEY, pat);
+      }
+
+      const btn = document.getElementById("crawlBtn");
+      const statusTxt = document.getElementById("statusTxt");
+      btn.disabled = true;
+      btn.textContent = "수집 요청중";
+      statusTxt.textContent = "수집 시작...";
+
+      try {
+        const res = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches`, {
+          method: "POST",
+          headers: {
+            "Accept": "application/vnd.github+json",
+            "Authorization": `Bearer ${pat}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ ref: "main" })
+        });
+
+        if (res.status === 401 || res.status === 403) {
+          localStorage.removeItem(GH_PAT_KEY);
+          throw new Error("토큰 권한 오류 (다시 눌러 새 토큰을 입력하세요)");
+        }
+        if (!res.ok) throw new Error(`GitHub 응답 오류 (${res.status})`);
+
+        let sec = 25;
+        statusTxt.textContent = `수집 중 (${sec}초 후 갱신)`;
+        const timer = setInterval(() => {
+          sec -= 1;
+          if (sec > 0) {
+            statusTxt.textContent = `수집 중 (${sec}초 후 갱신)`;
+          } else {
+            clearInterval(timer);
+            btn.disabled = false;
+            btn.textContent = "⚡ 수집";
+            loadData();
+          }
+        }, 1000);
+      } catch (err) {
+        alert(err.message);
+        statusTxt.textContent = "수집 실패";
+        btn.disabled = false;
+        btn.textContent = "⚡ 수집";
+      }
     }
 
     function markRead(postId) {
@@ -158,18 +235,6 @@
       onlyUnread = !onlyUnread;
       el.classList.toggle("active", onlyUnread);
       render();
-    }
-
-    function calcScore(post) {
-      const tokens = extractTokens(post);
-      let pref = 0;
-      tokens.forEach(t => { pref += (weights[t] || 0); });
-
-      const ageHours = (Date.now() - new Date(post.created_at).getTime()) / 3600000;
-      const freshness = Math.max(0, 6 - ageHours * 0.25);
-      const recBonus = Math.min(5, (post.recommend || 0) * 0.5);
-
-      return Number((pref * 1.5 + freshness + recBonus).toFixed(1));
     }
 
     async function loadData() {
@@ -238,7 +303,7 @@
     function render() {
       const feed = document.getElementById("feed");
       let list = posts.filter(p => !onlyUnread || !readSet.has(p.id));
-      list = list.map(p => ({ ...p, _score: calcScore(p) }));
+      list = list.map(p => ({ ...p, _score: calcScore(p), _hot: isHotPost(p) }));
 
       if (currentSort === "smart") {
         list.sort((a, b) => b._score - a._score);
@@ -252,9 +317,10 @@
       feed.innerHTML = list.map(p => {
         const isRead = readSet.has(p.id);
         return `
-          <article class="card ${p.feedback === 1 ? 'liked' : ''} ${p.feedback === -1 ? 'disliked' : ''} ${isRead ? 'read' : ''}">
+          <article class="card ${p._hot ? 'hot' : ''} ${p.feedback === 1 ? 'liked' : ''} ${p.feedback === -1 ? 'disliked' : ''} ${isRead ? 'read' : ''}">
             <div class="meta">
               <span class="badge">${p.gallery_name}</span>
+              ${p._hot ? `<span class="hot-badge">🔥 인기</span>` : ""}
               ${p.subject ? `<span>[${p.subject}]</span>` : ""}
               <span>${new Date(p.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</span>
               ${isRead ? `<span class="read-badge">읽음</span>` : ""}
