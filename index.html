@@ -68,6 +68,51 @@
     }
     .fb-btn.on-like { background: #14532d; border-color: #22c55e; color: #bbf7d0; }
     .fb-btn.on-dislike { background: #450a0a; border-color: #ef4444; color: #fecaca; }
+
+    /* 키워드 관리 패널 & 모달 */
+    .modal-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 50;
+      background: rgba(2, 6, 23, 0.8); backdrop-filter: blur(4px);
+      align-items: flex-end; justify-content: center;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-sheet {
+      width: 100%; max-width: 540px; max-height: 82vh;
+      background: #1e293b; border-top-left-radius: 18px; border-top-right-radius: 18px;
+      border-top: 1px solid #334155; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    }
+    .modal-head { display: flex; justify-content: space-between; align-items: center; }
+    .modal-head h2 { font-size: 16px; font-weight: 700; }
+    .close-btn {
+      background: #334155; color: #e2e8f0; border: none;
+      padding: 4px 10px; border-radius: 8px; font-size: 13px; cursor: pointer;
+    }
+    .kw-form { display: flex; gap: 6px; }
+    .kw-input {
+      flex: 1; background: #0f172a; border: 1px solid #334155; color: #f8fafc;
+      padding: 8px 10px; border-radius: 8px; font-size: 13px; outline: none;
+    }
+    .kw-input:focus { border-color: #3b82f6; }
+    .kw-btn {
+      border: none; padding: 8px 11px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .kw-btn.boost { background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }
+    .kw-btn.block { background: #450a0a; color: #fecaca; border: 1px solid #ef4444; }
+    .kw-hint { font-size: 11px; color: #94a3b8; line-height: 1.4; }
+    .kw-list {
+      overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px;
+    }
+    .kw-item {
+      display: flex; justify-content: space-between; align-items: center;
+      background: #0f172a; border: 1px solid #334155; padding: 7px 10px; border-radius: 8px; font-size: 13px;
+    }
+    .kw-score.pos { color: #4ade80; font-weight: 600; }
+    .kw-score.neg { color: #f87171; font-weight: 600; }
+    .kw-score.ban { color: #ef4444; font-weight: 700; }
+    .kw-del {
+      background: transparent; border: 1px solid #475569; color: #94a3b8;
+      padding: 2px 7px; border-radius: 6px; font-size: 11px; margin-left: 8px; cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -84,10 +129,31 @@
       <button class="tab active" data-sort="smart" onclick="setSort('smart', this)">✨ 내 취향순</button>
       <button class="tab" data-sort="recent" onclick="setSort('recent', this)">🕒 최신순</button>
       <button class="tab" id="unreadToggle" onclick="toggleUnread(this)">👀 안 읽은 글만</button>
+      <button class="tab" onclick="openKwModal()">⚙️ 키워드</button>
     </div>
   </header>
 
   <main class="feed" id="feed">불러오는 중...</main>
+
+  <!-- 키워드 관리 모달 -->
+  <div class="modal-backdrop" id="kwModal" onclick="if(event.target===this) closeKwModal()">
+    <div class="modal-sheet">
+      <div class="modal-head">
+        <h2>⚙️ 취향 · 차단 키워드 관리</h2>
+        <button class="close-btn" onclick="closeKwModal()">닫기</button>
+      </div>
+      <div class="kw-form">
+        <input type="text" class="kw-input" id="kwInput" placeholder="예: claude, 친목, sub:정보" onkeydown="if(event.key==='Enter') addKeyword(10)" />
+        <button class="kw-btn boost" onclick="addKeyword(10)">🚀 +10점</button>
+        <button class="kw-btn block" onclick="addKeyword(-999)">🚫 완전차단</button>
+      </div>
+      <p class="kw-hint">
+        • <b>완전차단(-999점)</b> 등록 시 해당 단어가 들어간 글은 피드에서 완전히 숨겨집니다.<br/>
+        • 말머리 제어는 <b>sub:일반</b>, <b>sub:정보</b> 형식으로 입력하세요.
+      </p>
+      <div class="kw-list" id="kwList"></div>
+    </div>
+  </div>
 
   <script>
     const SUPABASE_URL = "https://kfmqoicilcunpahxgyek.supabase.co";
@@ -133,7 +199,7 @@
 
     function extractTokens(post) {
       const tokens = new Set();
-      if (post.subject) tokens.add(`sub:${post.subject}`);
+      if (post.subject) tokens.add(`sub:${post.subject.toLowerCase()}`);
 
       const rawWords = post.title
         .toLowerCase()
@@ -151,6 +217,22 @@
       return Array.from(tokens);
     }
 
+    // 완전 차단(-500점 이하) 키워드가 제목 부분문자열 또는 토큰에 포함되었는지 확인
+    function isBlockedPost(post) {
+      const titleLower = post.title.toLowerCase();
+      const subjToken = post.subject ? `sub:${post.subject.toLowerCase()}` : "";
+      for (const [token, score] of Object.entries(weights)) {
+        if (score <= -500) {
+          if (token.startsWith("sub:")) {
+            if (subjToken === token) return true;
+          } else if (titleLower.includes(token)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
     function isHotPost(post) {
       return (post.recommend || 0) >= 5 || (post.views || 0) >= 300;
     }
@@ -160,6 +242,15 @@
       let pref = 0;
       tokens.forEach(t => { pref += (weights[t] || 0); });
 
+      // 직접 부스트 등록한 키워드가 띄어쓰기 없이 제목에 포함된 경우에도 가산점 반영
+      const titleLower = post.title.toLowerCase();
+      const tokenSet = new Set(tokens);
+      for (const [kw, score] of Object.entries(weights)) {
+        if (score >= 10 && !kw.startsWith("sub:") && !tokenSet.has(kw) && titleLower.includes(kw)) {
+          pref += score;
+        }
+      }
+
       const ageHours = (Date.now() - new Date(post.created_at).getTime()) / 3600000;
       const freshness = Math.max(0, 6 - ageHours * 0.25);
       const recBonus = Math.min(6, (post.recommend || 0) * 0.6);
@@ -168,7 +259,71 @@
       return Number((pref * 1.5 + freshness + recBonus + hotBonus).toFixed(1));
     }
 
-    async function triggerCrawl() {
+    // 키워드 모달 제어
+    function openKwModal() {
+      renderKwList();
+      document.getElementById("kwModal").classList.add("open");
+      setTimeout(() => document.getElementById("kwInput").focus(), 100);
+    }
+
+    function closeKwModal() {
+      document.getElementById("kwModal").classList.remove("open");
+    }
+
+    function renderKwList() {
+      const listEl = document.getElementById("kwList");
+      const entries = Object.entries(weights)
+        .filter(([, s]) => s !== 0)
+        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+
+      if (!entries.length) {
+        listEl.innerHTML = "<p style='color:#64748b;font-size:12px;padding:12px 0;'>등록되거나 학습된 키워드가 아직 없습니다.</p>";
+        return;
+      }
+
+      listEl.innerHTML = entries.map(([token, score]) => {
+        const cls = score <= -500 ? "ban" : (score > 0 ? "pos" : "neg");
+        const label = score <= -500 ? "🚫 차단됨" : `${score > 0 ? "+" : ""}${score}점`;
+        const safeToken = token.replace(/'/g, "\\'");
+        return `
+          <div class="kw-item">
+            <span>${token}</span>
+            <div>
+              <span class="kw-score ${cls}">${label}</span>
+              <button class="kw-del" onclick="removeKeyword('${safeToken}')">삭제</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function addKeyword(scoreVal) {
+      const input = document.getElementById("kwInput");
+      let kw = input.value.trim().toLowerCase();
+      if (!kw) return;
+      if (!kw.startsWith("sub:")) {
+        kw = stripJosa(kw);
+      }
+      input.value = "";
+
+      weights[kw] = scoreVal;
+      renderKwList();
+      render();
+
+      await db.from("user_weights").upsert(
+        { token: kw, score: scoreVal, updated_at: new Date().toISOString() },
+        { on_conflict: "token" }
+      );
+    }
+
+    async function removeKeyword(token) {
+      delete weights[token];
+      renderKwList();
+      render();
+      await db.from("user_weights").delete().eq("token", token);
+    }
+
+async function triggerCrawl() {
       let pat = localStorage.getItem(GH_PAT_KEY);
       if (!pat) {
         pat = prompt("GitHub 토큰(github_pat_...)을 한 번만 입력하세요.\n(이 기기 브라우저에만 안전하게 저장됩니다)");
@@ -180,8 +335,11 @@
       const btn = document.getElementById("crawlBtn");
       const statusTxt = document.getElementById("statusTxt");
       btn.disabled = true;
-      btn.textContent = "수집 요청중";
-      statusTxt.textContent = "수집 시작...";
+      btn.textContent = "수집중";
+      statusTxt.textContent = "즉시 조회 + 수집 요청";
+
+      // 1. 누르자마자 먼저 현재 DB 상태 즉시 반영
+      await loadData();
 
       try {
         const res = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches`, {
@@ -200,19 +358,18 @@
         }
         if (!res.ok) throw new Error(`GitHub 응답 오류 (${res.status})`);
 
-        let sec = 25;
-        statusTxt.textContent = `수집 중 (${sec}초 후 갱신)`;
-        const timer = setInterval(() => {
-          sec -= 1;
-          if (sec > 0) {
-            statusTxt.textContent = `수집 중 (${sec}초 후 갱신)`;
-          } else {
-            clearInterval(timer);
-            btn.disabled = false;
-            btn.textContent = "⚡ 수집";
-            loadData();
-          }
-        }, 1000);
+        // 2. 수집 완료 시점에 맞춰 단계별 자동 재조회(8초, 16초, 24초)
+        const checkpoints = [8, 16, 24];
+        checkpoints.forEach((sec, idx) => {
+          setTimeout(async () => {
+            statusTxt.textContent = `반영 확인 중 (${idx + 1}/${checkpoints.length})`;
+            await loadData();
+            if (idx === checkpoints.length - 1) {
+              btn.disabled = false;
+              btn.textContent = "⚡ 수집";
+            }
+          }, sec * 1000);
+        });
       } catch (err) {
         alert(err.message);
         statusTxt.textContent = "수집 실패";
@@ -302,7 +459,11 @@
 
     function render() {
       const feed = document.getElementById("feed");
-      let list = posts.filter(p => !onlyUnread || !readSet.has(p.id));
+      let list = posts.filter(p => !isBlockedPost(p));
+      if (onlyUnread) {
+        list = list.filter(p => !readSet.has(p.id));
+      }
+
       list = list.map(p => ({ ...p, _score: calcScore(p), _hot: isHotPost(p) }));
 
       if (currentSort === "smart") {
