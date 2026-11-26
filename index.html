@@ -99,10 +99,54 @@
     let currentSort = "smart";
     let onlyUnread = false;
 
+    // 노이즈 방지를 위한 불용어 목록
+    const STOPWORDS = new Set([
+      "진짜", "오늘", "지금", "방금", "아까", "내일", "요즘", "그냥", "근데", "그래서",
+      "이거", "저거", "그거", "뭐임", "뭐냐", "뭔가", "왜이럼", "어떻게", "어떡함",
+      "질문", "질문좀", "있음", "없음", "있냐", "없냐", "가능", "불가능", "정도",
+      "완전", "너무", "존나", "개추", "추천", "개념", "ㅇㅇ", "ㅋㅋ", "ㅎㅎ", "ㅠㅠ",
+      "사람", "생각", "느낌", "이유", "문제", "상황", "현황", "근황", "이번", "다음"
+    ]);
+
+    // 한국어 조사 제거 (어근 2글자 이상 유지될 때만 제거)
+    function stripJosa(word) {
+      if (!/[가-힣]$/.test(word)) return word;
+      const suffixes = [
+        "에서는", "에게는", "으로는", "이라고", "이라는", "이나마",
+        "에서", "에게", "한테", "으로", "부터", "까지", "처럼", "보다", "마저", "조차", "밖에", "이랑", "하고", "이나", "인가", "인지", "인데", "인데도",
+        "은", "는", "이", "가", "을", "를", "에", "의", "도", "만", "로", "와", "과", "랑", "나", "야", "임", "함", "됨"
+      ];
+      for (const s of suffixes) {
+        if (word.endsWith(s) && word.length - s.length >= 2) {
+          return word.slice(0, -s.length);
+        }
+      }
+      return word;
+    }
+
+    function extractTokens(post) {
+      const tokens = new Set();
+      if (post.subject) tokens.add(`sub:${post.subject}`);
+
+      const rawWords = post.title
+        .toLowerCase()
+        .replace(/[^가-힣a-z0-9\s]/g, " ")
+        .split(/\s+/);
+
+      for (const raw of rawWords) {
+        if (raw.length < 2) continue;
+        const clean = stripJosa(raw);
+        if (clean.length < 2) continue;
+        if (STOPWORDS.has(clean) || STOPWORDS.has(raw)) continue;
+        if (/^\d+$/.test(clean)) continue; // 순수 숫자만 있는 토큰 제외
+        tokens.add(clean);
+      }
+      return Array.from(tokens);
+    }
+
     function markRead(postId) {
       if (!readSet.has(postId)) {
         readSet.add(postId);
-        // 최근 1,000개까지만 저장 용량 유지
         const arr = Array.from(readSet).slice(-1000);
         readSet = new Set(arr);
         localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(arr));
@@ -114,18 +158,6 @@
       onlyUnread = !onlyUnread;
       el.classList.toggle("active", onlyUnread);
       render();
-    }
-
-    function extractTokens(post) {
-      const tokens = new Set();
-      if (post.subject) tokens.add(`sub:${post.subject}`);
-      const words = post.title
-        .toLowerCase()
-        .replace(/[^가-힣a-z0-9\s]/g, " ")
-        .split(/\s+/)
-        .filter(w => w.length >= 2);
-      words.forEach(w => tokens.add(w));
-      return Array.from(tokens);
     }
 
     function calcScore(post) {
