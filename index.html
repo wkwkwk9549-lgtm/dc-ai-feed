@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="theme-color" content="#111827" />
+  <title>내 AI 갤 피드</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Pretendard", sans-serif;
+      background: #0f172a; color: #f1f5f9; padding-bottom: 40px;
+    }
+    header {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(8px);
+      padding: 12px 14px; border-bottom: 1px solid #1e293b;
+    }
+    .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    h1 { font-size: 17px; font-weight: 700; }
+    .refresh-btn {
+      background: #1e293b; color: #93c5fd; border: 1px solid #334155;
+      padding: 5px 10px; border-radius: 8px; font-size: 12px;
+    }
+    .tabs { display: flex; gap: 6px; overflow-x: auto; }
+    .tab {
+      background: #1e293b; color: #94a3b8; border: none;
+      padding: 6px 11px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+    }
+    .tab.active { background: #3b82f6; color: #fff; font-weight: 600; }
+    .feed { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+    .card {
+      background: #1e293b; border-radius: 12px; padding: 12px 14px;
+      border: 1px solid #334155; display: flex; flex-direction: column; gap: 8px;
+    }
+    .card.liked { border-color: #22c55e; }
+    .card.disliked { opacity: 0.45; }
+    .meta { display: flex; gap: 6px; align-items: center; font-size: 11px; color: #94a3b8; }
+    .badge {
+      background: #334155; color: #e2e8f0; padding: 2px 6px; border-radius: 5px; font-weight: 600;
+    }
+    .score-tag { margin-left: auto; color: #60a5fa; font-weight: 600; }
+    .title {
+      color: #f8fafc; text-decoration: none; font-size: 15px; line-height: 1.4; font-weight: 500;
+      word-break: keep-all;
+    }
+    .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
+    .stats { font-size: 11px; color: #64748b; }
+    .btns { display: flex; gap: 8px; }
+    .fb-btn {
+      background: #0f172a; border: 1px solid #334155; color: #cbd5e1;
+      padding: 5px 12px; border-radius: 8px; font-size: 13px;
+    }
+    .fb-btn.on-like { background: #14532d; border-color: #22c55e; color: #bbf7d0; }
+    .fb-btn.on-dislike { background: #450a0a; border-color: #ef4444; color: #fecaca; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="top-row">
+      <h1>🤖 내 AI 갤러리 피드</h1>
+      <button class="refresh-btn" onclick="loadData()">새로고침</button>
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="tab active" data-sort="smart" onclick="setSort('smart', this)">✨ 내 취향순</button>
+      <button class="tab" data-sort="recent" onclick="setSort('recent', this)">🕒 최신순</button>
+      <button class="tab" data-gal="ALL" onclick="setGal('ALL', this)">전체</button>
+      <button class="tab" data-gal="thesingularity" onclick="setGal('thesingularity', this)">특갤</button>
+      <!-- ▼ 아래 에활갤실제ID 를 scraper.py에 넣은 에활갤 ID로 바꾸세요 -->
+      <button class="tab" data-gal="에활갤실제ID" onclick="setGal('에활갤실제ID', this)">에활갤</button>
+      <button class="tab" data-gal="rltgjqm" onclick="setGal('rltgjqm', this)">로갤</button>
+    </div>
+  </header>
+
+  <main class="feed" id="feed">불러오는 중...</main>
+
+  <script>
+    const SUPABASE_URL = "https://kfmqoicilcunpahxgyek.supabase.co";
+    // ▼ 아래 따옴표 안에 Supabase에서 복사한 anon 키(eyJ...)를 붙여넣으세요
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmbXFvaWNpbGN1bnBhaHhneWVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2ODY0NDcsImV4cCI6MjExMTI2MjQ0N30.s-amBbpBGMSVTMtaiQGVVwVBd8oxXGPGLfLgKwGFhB8";
+    const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let posts = [];
+    let weights = {};
+    let currentSort = "smart";
+    let currentGal = "ALL";
+
+    function extractTokens(post) {
+      const tokens = new Set();
+      tokens.add(`gal:${post.gallery_id}`);
+      if (post.subject) tokens.add(`sub:${post.subject}`);
+      const words = post.title
+        .toLowerCase()
+        .replace(/[^가-힣a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter(w => w.length >= 2);
+      words.forEach(w => tokens.add(w));
+      return Array.from(tokens);
+    }
+
+    function calcScore(post) {
+      const tokens = extractTokens(post);
+      let pref = 0;
+      tokens.forEach(t => { pref += (weights[t] || 0); });
+
+      const ageHours = (Date.now() - new Date(post.created_at).getTime()) / 3600000;
+      const freshness = Math.max(0, 6 - ageHours * 0.25);
+      const recBonus = Math.min(5, (post.recommend || 0) * 0.5);
+
+      return Number((pref * 1.5 + freshness + recBonus).toFixed(1));
+    }
+
+    async function loadData() {
+      const [postRes, weightRes] = await Promise.all([
+        db.from("dc_posts").select("*").order("created_at", { ascending: false }).limit(200),
+        db.from("user_weights").select("*")
+      ]);
+      posts = postRes.data || [];
+      weights = {};
+      (weightRes.data || []).forEach(r => { weights[r.token] = r.score; });
+      render();
+    }
+
+    async function vote(postId, value) {
+      const post = posts.find(p => p.id === postId);
+      if (!post) return;
+
+      const nextVal = post.feedback === value ? 0 : value;
+      const delta = nextVal - post.feedback;
+      post.feedback = nextVal;
+
+      const tokens = extractTokens(post);
+      const upserts = tokens.map(t => {
+        const nextScore = (weights[t] || 0) + delta;
+        weights[t] = nextScore;
+        return { token: t, score: nextScore, updated_at: new Date().toISOString() };
+      });
+
+      render();
+      await Promise.all([
+        db.from("dc_posts").update({ feedback: nextVal }).eq("id", postId),
+        db.from("user_weights").upsert(upserts, { on_conflict: "token" })
+      ]);
+    }
+
+    function setSort(mode, el) {
+      currentSort = mode;
+      document.querySelectorAll("[data-sort]").forEach(b => b.classList.remove("active"));
+      el.classList.add("active");
+      render();
+    }
+
+    function setGal(gal, el) {
+      currentGal = gal;
+      document.querySelectorAll("[data-gal]").forEach(b => b.classList.remove("active"));
+      el.classList.add("active");
+      render();
+    }
+
+    function render() {
+      const feed = document.getElementById("feed");
+      let list = posts.filter(p => currentGal === "ALL" || p.gallery_id === currentGal);
+
+      list = list.map(p => ({ ...p, _score: calcScore(p) }));
+      if (currentSort === "smart") {
+        list.sort((a, b) => b._score - a._score);
+      }
+
+      if (!list.length) {
+        feed.innerHTML = "<p style='color:#94a3b8;padding:20px;'>수집된 글이 없습니다.</p>";
+        return;
+      }
+
+      feed.innerHTML = list.map(p => `
+        <article class="card ${p.feedback === 1 ? 'liked' : ''} ${p.feedback === -1 ? 'disliked' : ''}">
+          <div class="meta">
+            <span class="badge">${p.gallery_name}</span>
+            ${p.subject ? `<span>[${p.subject}]</span>` : ""}
+            <span>${new Date(p.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</span>
+            <span class="score-tag">취향 ${p._score}</span>
+          </div>
+          <a class="title" href="${p.url}" target="_blank" rel="noopener">${p.title}</a>
+          <div class="actions">
+            <span class="stats">추천 ${p.recommend} · 조회 ${p.views}</span>
+            <div class="btns">
+              <button class="fb-btn ${p.feedback === 1 ? 'on-like' : ''}" onclick="vote('${p.id}', 1)">👍 좋음</button>
+              <button class="fb-btn ${p.feedback === -1 ? 'on-dislike' : ''}" onclick="vote('${p.id}', -1)">👎 싫음</button>
+            </div>
+          </div>
+        </article>
+      `).join("");
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
