@@ -244,7 +244,9 @@ function extractTokens(post) {
       }
       return false;
     }
-
+function isHotPost(post) {
+      return (post.recommend || 0) >= 5 || (post.views || 0) >= 300;
+    }
     function calcScore(post) {
       const tokens = extractTokens(post);
       let pref = 0;
