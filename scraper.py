@@ -53,6 +53,25 @@ def parse_dc_date(date_el):
     return now_utc.isoformat()
 
 
+def fetch_post_content(gal_id: str, post_no: int) -> str:
+    view_url = f"https://gall.dcinside.com/mgallery/board/view/?id={gal_id}&no={post_no}"
+    try:
+        resp = requests.get(view_url, headers=HEADERS, timeout=12)
+        if resp.status_code != 200:
+            return ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        body_el = soup.select_one("div.write_div")
+        if not body_el:
+            return ""
+        for tag in body_el.select("script, style, .og-div"):
+            tag.decompose()
+        text = re.sub(r"\s+", " ", body_el.get_text(" ", strip=True))
+        return text[:1500]  # DB 용량 및 브라우저 성능 보호를 위해 최대 1,500자 저장
+    except Exception as e:
+        print(f"[{gal_id}_{post_no}] 본문 수집 실패: {e}")
+        return ""
+
+
 def fetch_gallery_page(gal_id: str, gal_name: str, page: int):
     url = f"https://gall.dcinside.com/mgallery/board/lists/?id={gal_id}&page={page}"
     resp = requests.get(url, headers=HEADERS, timeout=15)
@@ -140,22 +159,36 @@ def main():
         try:
             posts = fetch_gallery(g["id"], g["name"], pages=(1, 2))
             all_posts.extend(posts)
-            print(f"[{g['name']}] {len(posts)}건 수집 완료 (1~2페이지)")
+            print(f"[{g['name']}] {len(posts)}건 목록 수집 완료")
         except Exception as e:
-            print(f"[{g['name']}] 수집 오류: {e}")
-        time.sleep(1.5)
+            print(f"[{g['name']}] 목록 수집 오류: {e}")
+        time.sleep(1.0)
 
     if all_posts:
         ids = [p["id"] for p in all_posts]
-        existing = supabase.table("dc_posts").select("id,feedback,created_at").in_("id", ids).execute()
+        existing = (
+            supabase.table("dc_posts")
+            .select("id,feedback,created_at,content")
+            .in_("id", ids)
+            .execute()
+        )
         existing_map = {row["id"]: row for row in (existing.data or [])}
 
+        new_content_count = 0
         for p in all_posts:
             prev = existing_map.get(p["id"])
             p["feedback"] = prev.get("feedback", 0) if prev else 0
 
+            # 이미 본문이 저장된 글은 재요청하지 않고 기존 본문 유지
+            if prev and prev.get("content"):
+                p["content"] = prev["content"]
+            else:
+                p["content"] = fetch_post_content(p["gallery_id"], p["post_no"])
+                new_content_count += 1
+                time.sleep(0.4)  # 디시 차단 방지용 딜레이
+
         supabase.table("dc_posts").upsert(all_posts, on_conflict="id").execute()
-        print(f"총 {len(all_posts)}건 DB 반영 완료")
+        print(f"총 {len(all_posts)}건 반영 완료 (신규 본문 수집: {new_content_count}건)")
 
     cleanup_old_posts()
 
