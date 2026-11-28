@@ -71,6 +71,11 @@
     .actions { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
     .stats { font-size: 11px; color: #64748b; }
     .btns { display: flex; gap: 8px; }
+    <div class="btns">
+                <button class="fb-btn ${p.feedback === 1 ? 'on-like' : ''}" onclick="vote('${p.id}', 1)">👍 좋음</button>
+                <button class="fb-btn ${p.feedback === -1 ? 'on-dislike' : ''}" onclick="vote('${p.id}', -1)">👎 싫음</button>
+                <button class="fb-btn" onclick="deletePost('${p.id}')" title="삭제된 글 숨기기">🗑️</button>
+              </div>
     .fb-btn {
       background: #0f172a; border: 1px solid #334155; color: #cbd5e1;
       padding: 5px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
@@ -165,6 +170,11 @@
   </div>
 
   <script>
+    async function deletePost(postId) {
+      posts = posts.filter(p => p.id !== postId);
+      render();
+      await db.from("dc_posts").delete().eq("id", postId);
+    }
     const SUPABASE_URL = "https://kfmqoicilcunpahxgyek.supabase.co";
     // ▼ 아래 따옴표 안에 Supabase Legacy 탭의 anon 키(eyJ...)를 붙여넣으세요
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtmbXFvaWNpbGN1bnBhaHhneWVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU2ODY0NDcsImV4cCI6MjExMTI2MjQ0N30.s-amBbpBGMSVTMtaiQGVVwVBd8oxXGPGLfLgKwGFhB8";
