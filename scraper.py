@@ -25,6 +25,12 @@ HEADERS = {
     "Referer": "https://gall.dcinside.com/",
 }
 
+DELETED_MARKERS = (
+    "해당 게시물은 삭제되었습니다",
+    "존재하지 않는 게시물",
+    "정상적인 접근이 아닙니다",
+)
+
 
 def parse_dc_date(date_el):
     now_utc = datetime.now(timezone.utc)
@@ -53,12 +59,18 @@ def parse_dc_date(date_el):
     return now_utc.isoformat()
 
 
-def fetch_post_content(gal_id: str, post_no: int) -> str:
+def fetch_post_content(gal_id: str, post_no: int):
+    """정상 본문이면 문자열 반환, 삭제된 글이면 None 반환"""
     view_url = f"https://gall.dcinside.com/mgallery/board/view/?id={gal_id}&no={post_no}"
     try:
         resp = requests.get(view_url, headers=HEADERS, timeout=12)
+        if resp.status_code == 404:
+            return None
         if resp.status_code != 200:
             return ""
+        if any(marker in resp.text for marker in DELETED_MARKERS):
+            return None
+
         soup = BeautifulSoup(resp.text, "html.parser")
         body_el = soup.select_one("div.write_div")
         if not body_el:
@@ -66,7 +78,7 @@ def fetch_post_content(gal_id: str, post_no: int) -> str:
         for tag in body_el.select("script, style, .og-div"):
             tag.decompose()
         text = re.sub(r"\s+", " ", body_el.get_text(" ", strip=True))
-        return text[:1500]  # DB 용량 및 브라우저 성능 보호를 위해 최대 1,500자 저장
+        return text[:1500]
     except Exception as e:
         print(f"[{gal_id}_{post_no}] 본문 수집 실패: {e}")
         return ""
@@ -140,6 +152,29 @@ def fetch_gallery(gal_id: str, gal_name: str, pages=(1, 2)):
     return list(merged.values())
 
 
+def remove_vanished_posts(gal_id: str, alive_posts: list):
+    """1~2페이지 최신 글 번호 범위 내에 있는데 목록에서 사라진 삭제글 정리"""
+    if not alive_posts:
+        return
+    alive_nos = {p["post_no"] for p in alive_posts}
+    min_no = min(alive_nos)
+
+    db_recent = (
+        supabase.table("dc_posts")
+        .select("id,post_no")
+        .eq("gallery_id", gal_id)
+        .gte("post_no", min_no)
+        .execute()
+    )
+    vanished_ids = [
+        row["id"] for row in (db_recent.data or [])
+        if row["post_no"] not in alive_nos
+    ]
+    if vanished_ids:
+        supabase.table("dc_posts").delete().in_("id", vanished_ids).execute()
+        print(f"[{gal_id}] 삭제된 게시물 {len(vanished_ids)}건 DB 제거 완료")
+
+
 def cleanup_old_posts():
     cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     res = (
@@ -154,18 +189,18 @@ def cleanup_old_posts():
 
 
 def main():
-    all_posts = []
     for g in GALLERIES:
         try:
             posts = fetch_gallery(g["id"], g["name"], pages=(1, 2))
-            all_posts.extend(posts)
             print(f"[{g['name']}] {len(posts)}건 목록 수집 완료")
         except Exception as e:
             print(f"[{g['name']}] 목록 수집 오류: {e}")
-        time.sleep(1.0)
+            continue
 
-    if all_posts:
-        ids = [p["id"] for p in all_posts]
+        if not posts:
+            continue
+
+        ids = [p["id"] for p in posts]
         existing = (
             supabase.table("dc_posts")
             .select("id,feedback,created_at,content")
@@ -174,21 +209,35 @@ def main():
         )
         existing_map = {row["id"]: row for row in (existing.data or [])}
 
+        valid_posts = []
+        deleted_during_fetch = []
         new_content_count = 0
-        for p in all_posts:
+
+        for p in posts:
             prev = existing_map.get(p["id"])
             p["feedback"] = prev.get("feedback", 0) if prev else 0
 
-            # 이미 본문이 저장된 글은 재요청하지 않고 기존 본문 유지
             if prev and prev.get("content"):
                 p["content"] = prev["content"]
+                valid_posts.append(p)
             else:
-                p["content"] = fetch_post_content(p["gallery_id"], p["post_no"])
+                content = fetch_post_content(p["gallery_id"], p["post_no"])
+                if content is None:
+                    deleted_during_fetch.append(p["id"])
+                else:
+                    p["content"] = content
+                    valid_posts.append(p)
                 new_content_count += 1
-                time.sleep(0.4)  # 디시 차단 방지용 딜레이
+                time.sleep(0.4)
 
-        supabase.table("dc_posts").upsert(all_posts, on_conflict="id").execute()
-        print(f"총 {len(all_posts)}건 반영 완료 (신규 본문 수집: {new_content_count}건)")
+        if valid_posts:
+            supabase.table("dc_posts").upsert(valid_posts, on_conflict="id").execute()
+        if deleted_during_fetch:
+            supabase.table("dc_posts").delete().in_("id", deleted_during_fetch).execute()
+
+        remove_vanished_posts(g["id"], valid_posts)
+        print(f"총 {len(valid_posts)}건 반영 완료 (신규 본문: {new_content_count}건, 삭제 제외: {len(deleted_during_fetch)}건)")
+        time.sleep(1.0)
 
     cleanup_old_posts()
 
