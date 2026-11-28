@@ -10,6 +10,12 @@
   <link rel="manifest" href='data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22%EB%82%B4%20%ED%8A%B9%EA%B0%A4%20%ED%94%BC%EB%93%9C%22%2C%22short_name%22%3A%22%ED%8A%B9%EA%B0%A4%20%ED%94%BC%EB%93%9C%22%2C%22start_url%22%3A%22.%2F%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f172a%22%2C%22theme_color%22%3A%22%230f172a%22%7D' />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
+    .snippet {
+      font-size: 12px; color: #94a3b8; line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden; word-break: keep-all;
+    }
+    .card.read .snippet { color: #475569; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Pretendard", sans-serif;
@@ -203,11 +209,12 @@
       return word;
     }
 
-    function extractTokens(post) {
+function extractTokens(post) {
       const tokens = new Set();
       if (post.subject) tokens.add(`sub:${post.subject.toLowerCase()}`);
 
-      const rawWords = post.title
+      const combinedText = `${post.title} ${(post.content || "").slice(0, 300)}`;
+      const rawWords = combinedText
         .toLowerCase()
         .replace(/[^가-힣a-z0-9\s]/g, " ")
         .split(/\s+/);
@@ -224,13 +231,13 @@
     }
 
     function isBlockedPost(post) {
-      const titleLower = post.title.toLowerCase();
+      const fullTextLower = `${post.title} ${post.content || ""}`.toLowerCase();
       const subjToken = post.subject ? `sub:${post.subject.toLowerCase()}` : "";
       for (const [token, score] of Object.entries(weights)) {
         if (score <= -500) {
           if (token.startsWith("sub:")) {
             if (subjToken === token) return true;
-          } else if (titleLower.includes(token)) {
+          } else if (fullTextLower.includes(token)) {
             return true;
           }
         }
@@ -238,19 +245,15 @@
       return false;
     }
 
-    function isHotPost(post) {
-      return (post.recommend || 0) >= 5 || (post.views || 0) >= 300;
-    }
-
     function calcScore(post) {
       const tokens = extractTokens(post);
       let pref = 0;
       tokens.forEach(t => { pref += (weights[t] || 0); });
 
-      const titleLower = post.title.toLowerCase();
+      const fullTextLower = `${post.title} ${post.content || ""}`.toLowerCase();
       const tokenSet = new Set(tokens);
       for (const [kw, score] of Object.entries(weights)) {
-        if (score >= 10 && !kw.startsWith("sub:") && !tokenSet.has(kw) && titleLower.includes(kw)) {
+        if (score >= 10 && !kw.startsWith("sub:") && !tokenSet.has(kw) && fullTextLower.includes(kw)) {
           pref += score;
         }
       }
@@ -504,19 +507,21 @@
         return;
       }
 
-      feed.innerHTML = list.map(p => {
+   feed.innerHTML = list.map(p => {
         const isRead = readSet.has(p.id);
+        const safeSnippet = (p.content || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         return `
           <article class="card ${p._hot ? 'hot' : ''} ${p.feedback === 1 ? 'liked' : ''} ${p.feedback === -1 ? 'disliked' : ''} ${isRead ? 'read' : ''}">
             <div class="meta">
               <span class="badge">${p.gallery_name}</span>
               ${p._hot ? `<span class="hot-badge">🔥 인기</span>` : ""}
               ${p.subject ? `<span>[${p.subject}]</span>` : ""}
-              <span>${new Date(p.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</span>
+              <span>${new Date(p.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false })}</span>
               ${isRead ? `<span class="read-badge">읽음</span>` : ""}
               <span class="score-tag">취향 ${p._score}</span>
             </div>
             <a class="title" href="${p.url}" target="_blank" rel="noopener" onclick="markRead('${p.id}')">${p.title}</a>
+            ${safeSnippet ? `<p class="snippet">${safeSnippet}</p>` : ""}
             <div class="actions">
               <span class="stats">추천 ${p.recommend} · 조회 ${p.views}</span>
               <div class="btns">
@@ -525,7 +530,6 @@
               </div>
             </div>
           </article>
-</article>
         `;
       }).join("");
     }
